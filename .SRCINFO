@@ -1,6 +1,6 @@
 pkgbase = aptos
 	pkgdesc = apt-syntax package management for pacman, with automatic AUR support
-	pkgver = 1.0.3
+	pkgver = 1.1.0
 	pkgrel = 1
 	url = https://github.com/MR-UNKNOWN74IDK/aptOS
 	arch = any
@@ -15,7 +15,7 @@ pkgbase = aptos
 	provides = aptyay
 	provides = apt
 	provides = apt-get
-	source = aptOS::git+https://github.com/MR-UNKNOWN74IDK/aptOS.git#tag=v1.0.3
+	source = aptOS::git+https://github.com/MR-UNKNOWN74IDK/aptOS.git#tag=v1.1.0
 	sha256sums = SKIP
 
 pkgname = aptos

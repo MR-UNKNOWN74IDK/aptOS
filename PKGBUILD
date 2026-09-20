@@ -1,6 +1,6 @@
 # Maintainer: MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>
 pkgname=aptos
-pkgver=1.0.3
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="apt-syntax package management for pacman, with automatic AUR support"
 arch=('any')

@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-VERSION="1.0.3"
+VERSION="1.1.0"
 PACMAN_BIN="pacman"
 PACMAN_CONFIG="/etc/pacman.conf"
 
@@ -76,14 +76,14 @@ Commands:
                                  List packages (default: all known, like real 'apt list')
     search                      Search for a package (repo + AUR if a helper is present)
     show, showpkg               Show package details
-    install                     Install a package
-    reinstall                   Reinstall a package (warns; pacman has no native reinstall)
+    install                     Install a package (redownloads/reinstalls if already up to date)
+    reinstall                   Same as install — pacman already reinstalls by default; alias for apt-familiarity
     remove                      Remove a package (keeps now-unneeded deps; see autoremove)
     purge                       Remove a package + its saved config backups
     autoremove                  Remove orphaned dependencies
-    update                      Refresh package databases
-    upgrade                     Upgrade installed packages
-    full-upgrade                Refresh + upgrade (sync databases, then upgrade)
+    update                      Refresh package databases (always run 'upgrade' right after)
+    upgrade, full-upgrade       Sync + upgrade the system (-Syu). pacman has no safe/full
+                                 distinction like apt does — both run the one correct operation.
     edit-sources                Edit pacman.conf in \$EDITOR, with a basic sanity check
     clean                       Clear the full package cache
     autoclean                   Clear old cached package versions only
@@ -311,7 +311,10 @@ case "$COMMAND" in
 
     reinstall)
         [[ ${#PACKAGES[@]} -eq 0 ]] && { err "reinstall requires at least one package"; exit 1; }
-        warn "pacman has no native reinstall; forcing a fresh install of the current version"
+        # pacman -S already redownloads/reinstalls an up-to-date package by
+        # default — --needed is what makes it skip that. So "reinstall" isn't
+        # a separate pacman operation, it's just "install" with --needed
+        # withheld even if --no-upgrade was passed.
         opts=(-S)
         $YES && opts+=(--noconfirm)
         run_pm "${opts[@]}" "${PACKAGES[@]}"
@@ -344,15 +347,16 @@ case "$COMMAND" in
 
     update)
         run_pm -Sy
+        warn "run 'apt upgrade' now. pacman does not support partial upgrades — leaving the system synced-but-not-upgraded can break it."
         ;;
 
-    upgrade)
-        opts=(-Su)
-        $YES && opts+=(--noconfirm)
-        run_pm "${opts[@]}"
-        ;;
-
-    full-upgrade)
+    upgrade|full-upgrade)
+        # pacman has no equivalent to apt's "upgrade won't remove packages,
+        # full-upgrade will" distinction — its resolver always does whatever
+        # dependency resolution requires. A sync-less upgrade (-Su alone) is
+        # also actively discouraged on Arch: never sync and upgrade in
+        # separate steps, or you risk a partial upgrade. So both apt commands
+        # route to the one correct, meaningful pacman action: -Syu.
         opts=(-Syu)
         $YES && opts+=(--noconfirm)
         run_pm "${opts[@]}"

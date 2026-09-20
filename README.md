@@ -26,7 +26,8 @@ apt install hyprland      # repo + AUR, via your detected helper
 apt search waybar
 apt upgrade -y
 apt autoremove
-sudo apt install hyprland # forces plain pacman, skips AUR
+apt rdepends firefox       # aptOS extra: reverse dependency lookup
+sudo apt install hyprland  # forces plain pacman, skips AUR
 ```
 
 Run `apt --help` for the full command and option list, including which apt

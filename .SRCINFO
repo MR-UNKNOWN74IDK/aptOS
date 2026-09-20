@@ -1,6 +1,6 @@
 pkgbase = aptos
 	pkgdesc = apt-syntax package management for pacman, with automatic AUR support
-	pkgver = 1.0.2
+	pkgver = 1.0.3
 	pkgrel = 1
 	url = https://github.com/MR-UNKNOWN74IDK/aptOS
 	arch = any
@@ -9,13 +9,13 @@ pkgbase = aptos
 	depends = pacman
 	optdepends = yay: AUR helper auto-detected and used automatically
 	optdepends = paru: AUR helper auto-detected and used automatically
-	optdepends = pacman-contrib: for the why/why-not dependency lookups
+	optdepends = pacman-contrib: for the rdepends command (reverse dependency lookups)
 	replaces = aptyay
 	conflicts = aptyay
 	provides = aptyay
 	provides = apt
 	provides = apt-get
-	source = aptOS::git+https://github.com/MR-UNKNOWN74IDK/aptOS.git#tag=v1.0.2
+	source = aptOS::git+https://github.com/MR-UNKNOWN74IDK/aptOS.git#tag=v1.0.3
 	sha256sums = SKIP
 
 pkgname = aptos

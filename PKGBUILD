@@ -1,6 +1,6 @@
 # Maintainer: MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>
 pkgname=aptos
-pkgver=1.0.2
+pkgver=1.0.3
 pkgrel=1
 pkgdesc="apt-syntax package management for pacman, with automatic AUR support"
 arch=('any')
@@ -9,7 +9,7 @@ license=('AGPL3')
 depends=('bash' 'pacman')
 optdepends=('yay: AUR helper auto-detected and used automatically'
             'paru: AUR helper auto-detected and used automatically'
-            'pacman-contrib: for the why/why-not dependency lookups')
+            'pacman-contrib: for the rdepends command (reverse dependency lookups)')
 replaces=('aptyay')
 conflicts=('aptyay')
 provides=('aptyay' 'apt' 'apt-get')

@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-VERSION="1.0.2"
+VERSION="1.0.3"
 PACMAN_BIN="pacman"
 PACMAN_CONFIG="/etc/pacman.conf"
 
@@ -72,23 +72,25 @@ aptOS ${VERSION} - apt commands for pacman, with automatic AUR support
 Usage: apt [options] <command> [packages]
 
 Commands:
-    list                        List installed packages (--upgradable for pending upgrades)
+    list [--installed|--upgradeable|--all-versions|<term>]
+                                 List packages (default: all known, like real 'apt list')
     search                      Search for a package (repo + AUR if a helper is present)
     show, showpkg               Show package details
     install                     Install a package
     reinstall                   Reinstall a package (warns; pacman has no native reinstall)
-    remove                      Remove a package
-    purge                       Remove a package and its config files
+    remove                      Remove a package (keeps now-unneeded deps; see autoremove)
+    purge                       Remove a package + its saved config backups
     autoremove                  Remove orphaned dependencies
     update                      Refresh package databases
     upgrade                     Upgrade installed packages
     full-upgrade                Refresh + upgrade (sync databases, then upgrade)
+    edit-sources                Edit pacman.conf in \$EDITOR, with a basic sanity check
     clean                       Clear the full package cache
     autoclean                   Clear old cached package versions only
-    policy                      Show configured mirrors/repos
-    build                       Build the current directory's PKGBUILD (makepkg -sri)
-    why                         Show what depends on a package (pactree)
-    why-not                     Explain why a package is not installed
+    policy [pkg]                Show installed vs. candidate version + repo for a package
+    build                       [aptOS extra, not apt] Build ./PKGBUILD (makepkg -sri)
+    rdepends                    [aptOS extra, not apt] Show reverse dependencies (pactree)
+    log [term]                  [aptOS extra, not apt] Tail /var/log/pacman.log (read-only)
     moo                         ???
 
 Options:
@@ -118,18 +120,17 @@ Notes:
     - When run with sudo, or as root, aptOS always falls back to plain pacman,
       because AUR helpers refuse to run as root.
 
-Unsupported (apt has these, pacman has no equivalent):
-    changelog        - use 'asp log <pkg>' (asp is on the AUR)
-    source           - use ABS or 'asp' to fetch build sources
-    edit-sources     - edit /etc/pacman.conf and /etc/pacman.d/mirrorlist manually
-    satisfy          - pacman does not resolve arbitrary dependency strings
-    history-*        - no transaction log to replay; see /var/log/pacman.log
-    --fix-broken     - pacman auto-rolls-back failed transactions; nothing to fix
+Real apt features with no pacman equivalent (nothing to build here, just flagged):
+    changelog        - pacman tracks no changelog data at all; use 'asp log <pkg>' (AUR)
+    source           - use the ABS (Arch Build System) or 'asp' to fetch build sources
+    satisfy          - pacman has no arbitrary dependency-string solver
+    --fix-broken     - pacman is transactional and auto-rolls-back; nothing to fix
     --no-install-recommends
-                     - pacman has no concept of recommended (vs. required) deps
+                     - pacman/PKGBUILDs have no concept of recommended-vs-required deps
     -t, --target-release
-                     - Arch is a rolling release; there is no release pinning
-    modernize-sources - not applicable to Arch Linux
+                     - Arch is a rolling release; there is no release/suite pinning
+Note: 'why'/'why-not' are aptitude commands, and 'history-*' are DNF commands —
+neither is real apt, so they aren't emulated here. See 'rdepends' and 'log' instead.
 EOF
 }
 
@@ -243,9 +244,6 @@ while [[ $# -gt 0 ]]; do
             unsupported "-t/--target-release" "Arch is a rolling release; there is no release pinning."
             exit 1
             ;;
-        --upgradable)
-            COMMAND="list-upgradable"
-            ;;
         -*)
             warn "unknown option '$1' (ignored)"
             ;;
@@ -280,11 +278,16 @@ fi
 # ---------------------------------------------------------------------------
 case "$COMMAND" in
     list)
-        query_pm -Q "${PACKAGES[@]}"
-        ;;
-
-    list-upgradable)
-        query_pm -Qu
+        if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+            query_pm -Sl
+        else
+            case "${PACKAGES[0]}" in
+                --installed) query_pm -Q ;;
+                --upgradeable|--upgradable) query_pm -Qu ;;
+                --all-versions) query_pm -Sl ;;
+                *) query_pm -Sl | grep -i -- "${PACKAGES[0]}" ;;
+            esac
+        fi
         ;;
 
     search)
@@ -316,14 +319,14 @@ case "$COMMAND" in
 
     remove)
         [[ ${#PACKAGES[@]} -eq 0 ]] && { err "remove requires at least one package"; exit 1; }
-        $PURGE && opts=(-Rns) || opts=(-Rs)
+        $PURGE && opts=(-Rn) || opts=(-R)
         $YES && opts+=(--noconfirm)
         run_pm "${opts[@]}" "${PACKAGES[@]}"
         ;;
 
     purge)
         [[ ${#PACKAGES[@]} -eq 0 ]] && { err "purge requires at least one package"; exit 1; }
-        opts=(-Rns)
+        opts=(-Rn)
         $YES && opts+=(--noconfirm)
         run_pm "${opts[@]}" "${PACKAGES[@]}"
         ;;
@@ -368,7 +371,20 @@ case "$COMMAND" in
         ;;
 
     policy)
-        [[ -f /etc/pacman.d/mirrorlist ]] && cat /etc/pacman.d/mirrorlist || err "mirrorlist not found at /etc/pacman.d/mirrorlist"
+        if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+            [[ -f /etc/pacman.d/mirrorlist ]] && grep '^Server' /etc/pacman.d/mirrorlist || err "mirrorlist not found"
+            exit 0
+        fi
+        for p in "${PACKAGES[@]}"; do
+            installed_ver=$(pacman -Qi "$p" 2>/dev/null | awk -F': ' '/^Version/{print $2; exit}')
+            sync_info=$(pacman -Si "$p" 2>/dev/null)
+            candidate_ver=$(awk -F': ' '/^Version/{print $2; exit}' <<<"$sync_info")
+            repo=$(awk -F': ' '/^Repository/{print $2; exit}' <<<"$sync_info")
+            echo "$p:"
+            echo "  Installed: ${installed_ver:-(none)}"
+            echo "  Candidate: ${candidate_ver:-(not in sync db)}"
+            [[ -n "$repo" ]] && echo "  Repository: $repo"
+        done
         ;;
 
     build)
@@ -381,17 +397,10 @@ case "$COMMAND" in
         fi
         ;;
 
-    why)
-        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "why requires a package name"; exit 1; }
+    rdepends)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "rdepends requires a package name"; exit 1; }
         command -v pactree >/dev/null 2>&1 || { err "'pactree' not found (part of pacman-contrib)"; exit 1; }
         pactree -r "${PACKAGES[@]}"
-        ;;
-
-    why-not)
-        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "why-not requires a package name"; exit 1; }
-        info "pacman doesn't compute install blockers the way apt does."
-        info "showing dependency info instead; check for version/conflict mismatches manually:"
-        pacman -Si "${PACKAGES[@]}" 2>/dev/null || err "package not found in sync databases"
         ;;
 
     moo)
@@ -410,23 +419,33 @@ EOF
         esac
         ;;
 
-    changelog)
-        unsupported "changelog" "pacman does not track changelogs; install 'asp' from the AUR and use 'asp log <pkg>'."
-        ;;
-    source)
-        unsupported "source" "use the ABS (Arch Build System) or 'asp' to fetch package build sources."
-        ;;
     edit-sources)
-        unsupported "edit-sources" "edit /etc/pacman.conf and /etc/pacman.d/mirrorlist manually."
+        local_editor="${EDITOR:-${VISUAL:-nano}}"
+        command -v "$local_editor" >/dev/null 2>&1 || { err "editor '$local_editor' not found; set \$EDITOR"; exit 1; }
+        target="$PACMAN_CONFIG"
+        cp "$target" "${target}.aptOS.bak" 2>/dev/null
+        if is_root; then
+            "$local_editor" "$target"
+        else
+            sudo -e "$target" 2>/dev/null || sudo "$local_editor" "$target"
+        fi
+        if ! grep -q '^\[options\]' "$target" 2>/dev/null; then
+            warn "sanity check: '[options]' section not found in $target — did you break the file? Backup saved at ${target}.aptOS.bak"
+        else
+            rm -f "${target}.aptOS.bak"
+        fi
+        info "you may also want to edit /etc/pacman.d/mirrorlist for mirror ordering."
         ;;
-    satisfy)
-        unsupported "satisfy" "pacman does not resolve arbitrary dependency strings."
-        ;;
-    modernize-sources)
-        unsupported "modernize-sources" "not applicable to Arch Linux's repo format."
-        ;;
-    history-list|history-info|history-redo|history-undo|history-rollback)
-        unsupported "$COMMAND" "pacman keeps no transaction history to replay; check /var/log/pacman.log instead."
+
+    log)
+        # Read-only. Not a rename of apt/dnf history: pacman keeps no undo/redo
+        # state, just an append-only log file.
+        [[ -f /var/log/pacman.log ]] || { err "/var/log/pacman.log not found"; exit 1; }
+        if [[ ${#PACKAGES[@]} -gt 0 ]]; then
+            grep -i -- "${PACKAGES[0]}" /var/log/pacman.log | tail -n 50
+        else
+            tail -n 50 /var/log/pacman.log
+        fi
         ;;
 
     *)

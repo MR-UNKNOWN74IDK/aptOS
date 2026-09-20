@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+#
+# aptyay - apt-syntax wrapper for pacman, with automatic AUR helper support
+#
+# Combines:
+#   - aptpac's AUR helper auto-detection (yay/paru/pikaur/etc.)
+#   - AptArch's clean colorized UX and explicit "unsupported feature" messages
+#
+# Copyright (C) 2026 MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>
+# License: AGPLv3 (see LICENSE)
+
+set -uo pipefail
+
+VERSION="1.0.0"
+PACMAN_BIN="pacman"
+
+# ---------------------------------------------------------------------------
+# Colors
+# ---------------------------------------------------------------------------
+USE_COLOR=true
+[[ -t 1 ]] || USE_COLOR=false
+[[ -n "${NO_COLOR:-}" ]] && USE_COLOR=false
+
+RESET=$'\x1b[0m'; RED=$'\x1b[31m'; GREEN=$'\x1b[32m'
+YELLOW=$'\x1b[33m'; CYAN=$'\x1b[36m'; PURPLE=$'\x1b[35m'
+
+clr()  { $USE_COLOR && printf '%s%s%s' "$2" "$1" "$RESET" || printf '%s' "$1"; }
+err()  { echo "$(clr "E: $*" "$RED")" >&2; }
+warn() { echo "$(clr "W: $*" "$YELLOW")" >&2; }
+info() { echo "$(clr "$*" "$CYAN")"; }
+ok()   { echo "$(clr "$*" "$GREEN")"; }
+debug(){ $DEBUG && echo "$(clr "D: $*" "$PURPLE")" >&2; }
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
+DEBUG=false
+YES=false
+DOWNLOAD_ONLY=false
+NO_UPGRADE=false
+REINSTALL=false
+PURGE=false
+AUR_HELPER_OVERRIDE=""
+COMMAND=""
+PACKAGES=()
+
+HELPERS=(yay paru pikaur aurman pacaur aura trizen)
+RUNNER="$PACMAN_BIN"
+
+is_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]]; }
+
+# ---------------------------------------------------------------------------
+# Help
+# ---------------------------------------------------------------------------
+print_usage() {
+cat <<EOF
+aptyay ${VERSION} - apt commands for pacman, with automatic AUR support
+
+Usage: aptyay [options] <command> [packages]
+
+Commands:
+    list                        List installed packages
+    search                      Search for a package (repo + AUR if a helper is present)
+    show, showpkg               Show package details
+    install                     Install a package
+    reinstall                   Reinstall a package (warns; pacman has no native reinstall)
+    remove                      Remove a package
+    purge                       Remove a package and its config files
+    autoremove                  Remove orphaned dependencies
+    update                      Refresh package databases
+    upgrade                     Upgrade installed packages
+    full-upgrade                Refresh + upgrade (sync databases, then upgrade)
+    clean                       Clear the full package cache
+    autoclean                   Clear old cached package versions only
+    why                         Show what depends on a package (pactree)
+    why-not                     Explain why a package is not installed
+    moo                         ???
+
+Options:
+    -y, --yes, --assume-yes     Do not prompt for confirmation
+    -d, --download-only         Download packages without installing
+        --no-upgrade            Do not upgrade already-installed packages (--needed)
+        --reinstall             Force reinstall
+        --purge                 Remove config files too (with 'remove')
+        --aur-helper <name>     Force a specific AUR helper (or plain pacman)
+        --no-color              Disable colored output
+        --color                 Force colored output
+    -h, --help                  Show this help
+    -v, --version                Show version info
+
+Notes:
+    - When run as a normal user, aptyay auto-detects an installed AUR helper
+      (yay, paru, pikaur, aurman, pacaur, aura, trizen) and uses it instead of
+      pacman, so 'install'/'search'/'show' etc. also reach the AUR.
+    - When run with sudo, or as root, aptyay always falls back to plain pacman,
+      because AUR helpers refuse to run as root.
+
+Unsupported (apt has these, pacman has no equivalent):
+    changelog, source, edit-sources, satisfy, history-*, --fix-broken,
+    --no-install-recommends, -t/--target-release, modernize-sources
+EOF
+}
+
+print_version() {
+    echo "aptyay ${VERSION}"
+    "$PACMAN_BIN" --version | head -3
+    for h in "${HELPERS[@]}"; do
+        command -v "$h" >/dev/null 2>&1 && echo "AUR helper available: $h"
+    done
+}
+
+unsupported() {
+    local feature="$1" reason="$2"
+    err "'$feature' is not supported."
+    echo "    $reason" >&2
+}
+
+# ---------------------------------------------------------------------------
+# AUR helper detection (aptpac-style)
+# ---------------------------------------------------------------------------
+detect_runner() {
+    if [[ -n "$AUR_HELPER_OVERRIDE" ]]; then
+        if command -v "$AUR_HELPER_OVERRIDE" >/dev/null 2>&1; then
+            RUNNER="$AUR_HELPER_OVERRIDE"
+        else
+            err "specified helper '$AUR_HELPER_OVERRIDE' is not installed"
+            exit 1
+        fi
+        return
+    fi
+
+    if is_root; then
+        RUNNER="$PACMAN_BIN"
+        return
+    fi
+
+    for h in "${HELPERS[@]}"; do
+        if command -v "$h" >/dev/null 2>&1; then
+            RUNNER="$h"
+            debug "using AUR helper: $h"
+            return
+        fi
+    done
+
+    RUNNER="$PACMAN_BIN"
+    debug "no AUR helper found, using pacman"
+}
+
+# Run a privileged pacman/helper operation, adding sudo only for plain pacman
+run_pm() {
+    if [[ "$RUNNER" == "$PACMAN_BIN" ]] && ! is_root; then
+        sudo "$PACMAN_BIN" "$@"
+    else
+        "$RUNNER" "$@"
+    fi
+}
+
+# Run a read-only query (search/show/list) — never needs sudo
+query_pm() {
+    "$RUNNER" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) print_usage; exit 0 ;;
+        -v|--version) print_version; exit 0 ;;
+        -y|--yes|--assume-yes) YES=true ;;
+        -d|--download-only) DOWNLOAD_ONLY=true ;;
+        --no-upgrade) NO_UPGRADE=true ;;
+        --reinstall) REINSTALL=true ;;
+        --purge) PURGE=true ;;
+        --no-color) USE_COLOR=false ;;
+        --color) USE_COLOR=true ;;
+        --debug) DEBUG=true ;;
+        --aur-helper)
+            shift
+            AUR_HELPER_OVERRIDE="${1:-}"
+            [[ -z "$AUR_HELPER_OVERRIDE" ]] && { err "--aur-helper requires an argument"; exit 1; }
+            ;;
+        -*)
+            warn "unknown option '$1' (ignored)"
+            ;;
+        *)
+            if [[ -z "$COMMAND" ]]; then
+                COMMAND="$1"
+            else
+                PACKAGES+=("$1")
+            fi
+            ;;
+    esac
+    shift
+done
+
+if [[ -z "$COMMAND" ]]; then
+    print_usage
+    exit 1
+fi
+
+detect_runner
+
+if [[ "$RUNNER" != "$PACMAN_BIN" ]] && is_root; then
+    # shouldn't normally hit this since detect_runner forces pacman when root,
+    # but guard anyway in case --aur-helper was forced under sudo
+    warn "running as root: AUR helper '$RUNNER' will likely refuse to run. Falling back to pacman."
+    RUNNER="$PACMAN_BIN"
+fi
+
+# ---------------------------------------------------------------------------
+# Command dispatch
+# ---------------------------------------------------------------------------
+case "$COMMAND" in
+    list)
+        query_pm -Q "${PACKAGES[@]}"
+        ;;
+
+    search)
+        if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+            err "search requires a search term"
+            exit 1
+        fi
+        query_pm -Ss "${PACKAGES[@]}"
+        ;;
+
+    show|showpkg)
+        if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+            err "show requires a package name"
+            exit 1
+        fi
+        # try local info first, fall back to sync/AUR info
+        query_pm -Qi "${PACKAGES[@]}" 2>/dev/null || query_pm -Si "${PACKAGES[@]}"
+        ;;
+
+    install)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "install requires at least one package"; exit 1; }
+        opts=(-S)
+        $YES && opts+=(--noconfirm)
+        $DOWNLOAD_ONLY && opts+=(-w)
+        $NO_UPGRADE && opts+=(--needed)
+        run_pm "${opts[@]}" "${PACKAGES[@]}"
+        ;;
+
+    reinstall)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "reinstall requires at least one package"; exit 1; }
+        warn "pacman has no native reinstall; forcing a fresh install of the current version"
+        opts=(-S)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}" "${PACKAGES[@]}"
+        ;;
+
+    remove)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "remove requires at least one package"; exit 1; }
+        opts=(-R)
+        $PURGE && opts=(-Rns) || opts+=(-s)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}" "${PACKAGES[@]}"
+        ;;
+
+    purge)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "purge requires at least one package"; exit 1; }
+        opts=(-Rns)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}" "${PACKAGES[@]}"
+        ;;
+
+    autoremove)
+        mapfile -t orphans < <(pacman -Qdtq 2>/dev/null)
+        if [[ ${#orphans[@]} -eq 0 ]]; then
+            ok "no orphaned packages to remove"
+        else
+            opts=(-Rns)
+            $YES && opts+=(--noconfirm)
+            run_pm "${opts[@]}" "${orphans[@]}"
+        fi
+        ;;
+
+    update)
+        run_pm -Sy
+        ;;
+
+    upgrade)
+        opts=(-Su)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}"
+        ;;
+
+    full-upgrade)
+        opts=(-Syu)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}"
+        ;;
+
+    clean)
+        opts=(-Scc)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}"
+        ;;
+
+    autoclean)
+        opts=(-Sc)
+        $YES && opts+=(--noconfirm)
+        run_pm "${opts[@]}"
+        ;;
+
+    why)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "why requires a package name"; exit 1; }
+        command -v pactree >/dev/null 2>&1 || { err "'pactree' not found (part of pacman-contrib)"; exit 1; }
+        pactree -r "${PACKAGES[@]}"
+        ;;
+
+    why-not)
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "why-not requires a package name"; exit 1; }
+        info "pacman doesn't compute install blockers the way apt does."
+        info "showing dependency info instead; check for version/conflict mismatches manually:"
+        pacman -Si "${PACKAGES[@]}" 2>/dev/null || err "package not found in sync databases"
+        ;;
+
+    moo)
+        case "${#PACKAGES[@]}" in
+            0) cat <<'EOF'
+        (__)
+        (oo)
+  /------\/
+ / |    ||
+*  /\---/\
+   ~~   ~~
+..."Have you mooed today?"...
+EOF
+                ;;
+            *) ok "You have found the super cow. It is amazing what one finds when going through pacman's manpage."
+                ;;
+        esac
+        ;;
+
+    changelog)
+        unsupported "changelog" "pacman does not track changelogs; install 'asp' from the AUR and use 'asp log <pkg>'."
+        ;;
+    source)
+        unsupported "source" "use the ABS (Arch Build System) or 'asp' to fetch package build sources."
+        ;;
+    edit-sources)
+        unsupported "edit-sources" "edit /etc/pacman.conf and /etc/pacman.d/mirrorlist manually."
+        ;;
+    satisfy)
+        unsupported "satisfy" "pacman does not resolve arbitrary dependency strings."
+        ;;
+    history-list|history-info|history-redo|history-undo|history-rollback)
+        unsupported "$COMMAND" "pacman keeps no transaction history to replay; check /var/log/pacman.log instead."
+        ;;
+
+    *)
+        err "unknown command '$COMMAND'"
+        print_usage
+        exit 1
+        ;;
+esac

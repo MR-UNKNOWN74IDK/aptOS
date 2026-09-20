@@ -1,6 +1,6 @@
-pkgbase = aptyay
-	pkgdesc = apt-syntax wrapper for pacman, with automatic AUR helper support
-	pkgver = 1.0.0
+pkgbase = aptos
+	pkgdesc = apt-syntax package management for pacman, with automatic AUR support
+	pkgver = 1.0.1
 	pkgrel = 1
 	url = https://github.com/MR-UNKNOWN74IDK/aptOS
 	arch = any
@@ -10,7 +10,10 @@ pkgbase = aptyay
 	optdepends = yay: AUR helper auto-detected and used automatically
 	optdepends = paru: AUR helper auto-detected and used automatically
 	optdepends = pacman-contrib: for the why/why-not dependency lookups
-	source = aptyay::git+https://github.com/MR-UNKNOWN74IDK/aptOS.git#tag=v1.0.0
+	replaces = aptyay
+	conflicts = aptyay
+	provides = aptyay
+	source = aptOS::git+https://github.com/MR-UNKNOWN74IDK/aptOS.git#tag=v1.0.1
 	sha256sums = SKIP
 
-pkgname = aptyay
+pkgname = aptos

@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
 #
-# aptyay - apt-syntax wrapper for pacman, with automatic AUR helper support
+# aptOS - apt-syntax package management for pacman, with automatic AUR support
+#
+# Usage: aptOS pkg <command> [options] [packages]
+#
+# "pkg" is a deliberate namespace (mirroring APT's own internal libapt-pkg)
+# so aptOS can grow other namespaces later (e.g. a future 'aptOS repo',
+# 'aptOS sys') without colliding with package-management verbs.
 #
 # Combines:
 #   - aptpac's AUR helper auto-detection (yay/paru/pikaur/etc.)
 #   - AptArch's clean colorized UX and explicit "unsupported feature" messages
+#   - additional apt option/command coverage found missing in both
 #
 # Copyright (C) 2026 MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>
 # License: AGPLv3 (see LICENSE)
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 PACMAN_BIN="pacman"
+PACMAN_CONFIG="/etc/pacman.conf"
 
 # ---------------------------------------------------------------------------
 # Colors
@@ -40,6 +48,7 @@ DOWNLOAD_ONLY=false
 NO_UPGRADE=false
 REINSTALL=false
 PURGE=false
+SIMULATE=false
 AUR_HELPER_OVERRIDE=""
 COMMAND=""
 PACKAGES=()
@@ -49,17 +58,21 @@ RUNNER="$PACMAN_BIN"
 
 is_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]]; }
 
+require_pacman() {
+    command -v "$PACMAN_BIN" >/dev/null 2>&1 || { err "'$PACMAN_BIN' not found. aptOS only runs on pacman-based systems (Arch, Manjaro, EndeavourOS, ...)."; exit 1; }
+}
+
 # ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
 print_usage() {
 cat <<EOF
-aptyay ${VERSION} - apt commands for pacman, with automatic AUR support
+aptOS ${VERSION} - apt commands for pacman, with automatic AUR support
 
-Usage: aptyay [options] <command> [packages]
+Usage: aptOS pkg [options] <command> [packages]
 
 Commands:
-    list                        List installed packages
+    list                        List installed packages (--upgradable for pending upgrades)
     search                      Search for a package (repo + AUR if a helper is present)
     show, showpkg               Show package details
     install                     Install a package
@@ -72,6 +85,8 @@ Commands:
     full-upgrade                Refresh + upgrade (sync databases, then upgrade)
     clean                       Clear the full package cache
     autoclean                   Clear old cached package versions only
+    policy                      Show configured mirrors/repos
+    build                       Build the current directory's PKGBUILD (makepkg -sri)
     why                         Show what depends on a package (pactree)
     why-not                     Explain why a package is not installed
     moo                         ???
@@ -79,30 +94,47 @@ Commands:
 Options:
     -y, --yes, --assume-yes     Do not prompt for confirmation
     -d, --download-only         Download packages without installing
+    -s, --simulate, --dry-run   Show what would happen, change nothing
+    -c, --config-file <file>    Use an alternate pacman.conf
         --no-upgrade            Do not upgrade already-installed packages (--needed)
         --reinstall             Force reinstall
         --purge                 Remove config files too (with 'remove')
         --aur-helper <name>     Force a specific AUR helper (or plain pacman)
         --no-color              Disable colored output
         --color                 Force colored output
+        --debug                 Verbose internal logging
     -h, --help                  Show this help
     -v, --version                Show version info
 
+Ignored for apt compatibility (accepted, no effect on pacman):
+    -o, --option <k=v>          apt config override
+        --cli-version            request a specific apt CLI version
+        --audit                  show audit info
+
 Notes:
-    - When run as a normal user, aptyay auto-detects an installed AUR helper
+    - When run as a normal user, aptOS auto-detects an installed AUR helper
       (yay, paru, pikaur, aurman, pacaur, aura, trizen) and uses it instead of
       pacman, so 'install'/'search'/'show' etc. also reach the AUR.
-    - When run with sudo, or as root, aptyay always falls back to plain pacman,
+    - When run with sudo, or as root, aptOS always falls back to plain pacman,
       because AUR helpers refuse to run as root.
 
 Unsupported (apt has these, pacman has no equivalent):
-    changelog, source, edit-sources, satisfy, history-*, --fix-broken,
-    --no-install-recommends, -t/--target-release, modernize-sources
+    changelog        - use 'asp log <pkg>' (asp is on the AUR)
+    source           - use ABS or 'asp' to fetch build sources
+    edit-sources     - edit /etc/pacman.conf and /etc/pacman.d/mirrorlist manually
+    satisfy          - pacman does not resolve arbitrary dependency strings
+    history-*        - no transaction log to replay; see /var/log/pacman.log
+    --fix-broken     - pacman auto-rolls-back failed transactions; nothing to fix
+    --no-install-recommends
+                     - pacman has no concept of recommended (vs. required) deps
+    -t, --target-release
+                     - Arch is a rolling release; there is no release pinning
+    modernize-sources - not applicable to Arch Linux
 EOF
 }
 
 print_version() {
-    echo "aptyay ${VERSION}"
+    echo "aptOS ${VERSION}"
     "$PACMAN_BIN" --version | head -3
     for h in "${HELPERS[@]}"; do
         command -v "$h" >/dev/null 2>&1 && echo "AUR helper available: $h"
@@ -148,14 +180,18 @@ detect_runner() {
 
 # Run a privileged pacman/helper operation, adding sudo only for plain pacman
 run_pm() {
+    if $SIMULATE; then
+        info "[simulate] ${RUNNER} $*"
+        return 0
+    fi
     if [[ "$RUNNER" == "$PACMAN_BIN" ]] && ! is_root; then
-        sudo "$PACMAN_BIN" "$@"
+        sudo "$PACMAN_BIN" --config "$PACMAN_CONFIG" "$@"
     else
         "$RUNNER" "$@"
     fi
 }
 
-# Run a read-only query (search/show/list) — never needs sudo
+# Run a read-only query (search/show/list) — never needs sudo, never simulated
 query_pm() {
     "$RUNNER" "$@"
 }
@@ -163,12 +199,36 @@ query_pm() {
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
+# First required token must be the namespace "pkg" (apt-pkg), to leave room
+# for future non-package namespaces.
+if [[ $# -eq 0 ]]; then
+    print_usage
+    exit 1
+fi
+
+case "$1" in
+    -h|--help) print_usage; exit 0 ;;
+    -v|--version) print_version; exit 0 ;;
+    pkg) shift ;;
+    *)
+        err "expected namespace 'pkg' as the first argument (e.g. 'aptOS pkg install firefox')"
+        print_usage
+        exit 1
+        ;;
+esac
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) print_usage; exit 0 ;;
         -v|--version) print_version; exit 0 ;;
         -y|--yes|--assume-yes) YES=true ;;
         -d|--download-only) DOWNLOAD_ONLY=true ;;
+        -s|--simulate|--dry-run) SIMULATE=true ;;
+        -c|--config-file)
+            shift
+            PACMAN_CONFIG="${1:-}"
+            [[ -z "$PACMAN_CONFIG" ]] && { err "-c/--config-file requires an argument"; exit 1; }
+            ;;
         --no-upgrade) NO_UPGRADE=true ;;
         --reinstall) REINSTALL=true ;;
         --purge) PURGE=true ;;
@@ -179,6 +239,25 @@ while [[ $# -gt 0 ]]; do
             shift
             AUR_HELPER_OVERRIDE="${1:-}"
             [[ -z "$AUR_HELPER_OVERRIDE" ]] && { err "--aur-helper requires an argument"; exit 1; }
+            ;;
+        -o|--option) shift ;; # accepted for apt compatibility, ignored
+        --cli-version) shift ;; # accepted, ignored
+        --audit) ;; # accepted, ignored
+        --fix-broken)
+            unsupported "--fix-broken" "pacman auto-rolls-back failed transactions; nothing to fix."
+            exit 1
+            ;;
+        --no-install-recommends)
+            unsupported "--no-install-recommends" "pacman has no concept of recommended vs. required dependencies."
+            exit 1
+            ;;
+        -t|--target-release)
+            shift
+            unsupported "-t/--target-release" "Arch is a rolling release; there is no release pinning."
+            exit 1
+            ;;
+        --upgradable)
+            COMMAND="list-upgradable"
             ;;
         -*)
             warn "unknown option '$1' (ignored)"
@@ -199,11 +278,12 @@ if [[ -z "$COMMAND" ]]; then
     exit 1
 fi
 
-detect_runner
+if [[ "$COMMAND" != "moo" ]]; then
+    require_pacman
+    detect_runner
+fi
 
 if [[ "$RUNNER" != "$PACMAN_BIN" ]] && is_root; then
-    # shouldn't normally hit this since detect_runner forces pacman when root,
-    # but guard anyway in case --aur-helper was forced under sudo
     warn "running as root: AUR helper '$RUNNER' will likely refuse to run. Falling back to pacman."
     RUNNER="$PACMAN_BIN"
 fi
@@ -216,20 +296,17 @@ case "$COMMAND" in
         query_pm -Q "${PACKAGES[@]}"
         ;;
 
+    list-upgradable)
+        query_pm -Qu
+        ;;
+
     search)
-        if [[ ${#PACKAGES[@]} -eq 0 ]]; then
-            err "search requires a search term"
-            exit 1
-        fi
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "search requires a search term"; exit 1; }
         query_pm -Ss "${PACKAGES[@]}"
         ;;
 
     show|showpkg)
-        if [[ ${#PACKAGES[@]} -eq 0 ]]; then
-            err "show requires a package name"
-            exit 1
-        fi
-        # try local info first, fall back to sync/AUR info
+        [[ ${#PACKAGES[@]} -eq 0 ]] && { err "show requires a package name"; exit 1; }
         query_pm -Qi "${PACKAGES[@]}" 2>/dev/null || query_pm -Si "${PACKAGES[@]}"
         ;;
 
@@ -252,8 +329,7 @@ case "$COMMAND" in
 
     remove)
         [[ ${#PACKAGES[@]} -eq 0 ]] && { err "remove requires at least one package"; exit 1; }
-        opts=(-R)
-        $PURGE && opts=(-Rns) || opts+=(-s)
+        $PURGE && opts=(-Rns) || opts=(-Rs)
         $YES && opts+=(--noconfirm)
         run_pm "${opts[@]}" "${PACKAGES[@]}"
         ;;
@@ -304,6 +380,20 @@ case "$COMMAND" in
         run_pm "${opts[@]}"
         ;;
 
+    policy)
+        [[ -f /etc/pacman.d/mirrorlist ]] && cat /etc/pacman.d/mirrorlist || err "mirrorlist not found at /etc/pacman.d/mirrorlist"
+        ;;
+
+    build)
+        command -v makepkg >/dev/null 2>&1 || { err "'makepkg' not found (part of base-devel)"; exit 1; }
+        [[ -f PKGBUILD ]] || { err "no PKGBUILD in the current directory"; exit 1; }
+        if $SIMULATE; then
+            info "[simulate] makepkg -sri"
+        else
+            makepkg -sri
+        fi
+        ;;
+
     why)
         [[ ${#PACKAGES[@]} -eq 0 ]] && { err "why requires a package name"; exit 1; }
         command -v pactree >/dev/null 2>&1 || { err "'pactree' not found (part of pacman-contrib)"; exit 1; }
@@ -329,8 +419,7 @@ case "$COMMAND" in
 ..."Have you mooed today?"...
 EOF
                 ;;
-            *) ok "You have found the super cow. It is amazing what one finds when going through pacman's manpage."
-                ;;
+            *) ok "You have found the super cow. It is amazing what one finds when going through pacman's manpage." ;;
         esac
         ;;
 
@@ -345,6 +434,9 @@ EOF
         ;;
     satisfy)
         unsupported "satisfy" "pacman does not resolve arbitrary dependency strings."
+        ;;
+    modernize-sources)
+        unsupported "modernize-sources" "not applicable to Arch Linux's repo format."
         ;;
     history-list|history-info|history-redo|history-undo|history-rollback)
         unsupported "$COMMAND" "pacman keeps no transaction history to replay; check /var/log/pacman.log instead."

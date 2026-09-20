@@ -1,6 +1,6 @@
 # Maintainer: MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>
 pkgname=aptos
-pkgver=1.0.1
+pkgver=1.0.2
 pkgrel=1
 pkgdesc="apt-syntax package management for pacman, with automatic AUR support"
 arch=('any')
@@ -12,7 +12,7 @@ optdepends=('yay: AUR helper auto-detected and used automatically'
             'pacman-contrib: for the why/why-not dependency lookups')
 replaces=('aptyay')
 conflicts=('aptyay')
-provides=('aptyay')
+provides=('aptyay' 'apt' 'apt-get')
 source=("aptOS::git+$url.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
@@ -20,4 +20,6 @@ package() {
     cd aptOS
     install -Dm755 aptOS "$pkgdir/usr/bin/aptOS"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    ln -s aptOS "$pkgdir/usr/bin/apt"
+    ln -s aptOS "$pkgdir/usr/bin/apt-get"
 }

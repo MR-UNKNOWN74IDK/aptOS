@@ -2,11 +2,11 @@
 #
 # aptOS - apt-syntax package management for pacman, with automatic AUR support
 #
-# Usage: aptOS pkg <command> [options] [packages]
+# Usage: apt <command> [options] [packages]
 #
-# "pkg" is a deliberate namespace (mirroring APT's own internal libapt-pkg)
-# so aptOS can grow other namespaces later (e.g. a future 'aptOS repo',
-# 'aptOS sys') without colliding with package-management verbs.
+# Ship this file as `aptOS`, then symlink it as `apt` (and optionally
+# `apt-get`) so it's invoked exactly like real apt:
+#   sudo ln -s /usr/local/bin/aptOS /usr/local/bin/apt
 #
 # Combines:
 #   - aptpac's AUR helper auto-detection (yay/paru/pikaur/etc.)
@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-VERSION="1.0.1"
+VERSION="1.0.2"
 PACMAN_BIN="pacman"
 PACMAN_CONFIG="/etc/pacman.conf"
 
@@ -69,7 +69,7 @@ print_usage() {
 cat <<EOF
 aptOS ${VERSION} - apt commands for pacman, with automatic AUR support
 
-Usage: aptOS pkg [options] <command> [packages]
+Usage: apt [options] <command> [packages]
 
 Commands:
     list                        List installed packages (--upgradable for pending upgrades)
@@ -199,23 +199,10 @@ query_pm() {
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
-# First required token must be the namespace "pkg" (apt-pkg), to leave room
-# for future non-package namespaces.
 if [[ $# -eq 0 ]]; then
     print_usage
     exit 1
 fi
-
-case "$1" in
-    -h|--help) print_usage; exit 0 ;;
-    -v|--version) print_version; exit 0 ;;
-    pkg) shift ;;
-    *)
-        err "expected namespace 'pkg' as the first argument (e.g. 'aptOS pkg install firefox')"
-        print_usage
-        exit 1
-        ;;
-esac
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

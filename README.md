@@ -2,15 +2,11 @@
 
 An apt-syntax wrapper for pacman, with automatic AUR helper support.
 
-`aptOS` lets you run familiar apt-style commands under a `pkg` namespace —
-`aptOS pkg install`, `aptOS pkg remove`, `aptOS pkg upgrade`, and so on — on
-any pacman-based system. When run as a normal user it auto-detects an
-installed AUR helper (yay, paru, pikaur, aurman, pacaur, aura, trizen) and
-routes through it automatically, so AUR packages are reachable too, not
-just official repo packages.
-
-> Renamed from `aptyay`. If you have the old `aptyay` package installed,
-> installing `aptos` will replace it automatically.
+`aptOS` lets you run familiar apt commands — `apt install`, `apt remove`,
+`apt upgrade`, and so on — on any pacman-based system. When run as a normal
+user it auto-detects an installed AUR helper (yay, paru, pikaur, aurman,
+pacaur, aura, trizen) and routes through it automatically, so AUR packages
+are reachable through apt syntax too, not just official repo packages.
 
 ## Install
 
@@ -20,18 +16,21 @@ cd aptOS
 makepkg -si
 ```
 
+This installs the `aptOS` binary plus `apt`/`apt-get` symlinks, so you can
+just type `apt install hyprland`, `apt upgrade`, etc.
+
 ## Usage
 
 ```bash
-aptOS pkg install firefox      # repo + AUR, via your detected helper
-aptOS pkg search waybar
-aptOS pkg upgrade -y
-aptOS pkg autoremove
-sudo aptOS pkg install firefox # forces plain pacman, skips AUR
+apt install hyprland      # repo + AUR, via your detected helper
+apt search waybar
+apt upgrade -y
+apt autoremove
+sudo apt install hyprland # forces plain pacman, skips AUR
 ```
 
-Run `aptOS pkg --help` for the full command and option list, including
-which apt features have no pacman equivalent and why.
+Run `apt --help` for the full command and option list, including which apt
+features have no pacman equivalent and why.
 
 ## Testing status
 

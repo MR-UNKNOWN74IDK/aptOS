@@ -1,0 +1,81 @@
+name: Release packages
+
+# Builds the Arch package (.pkg.tar.zst) for a tag and attaches it, with a
+# checksum, to that tag's GitHub release (creating the release if needed).
+#
+#  - Automatic: pushing a tag like v1.2.0 runs this.
+#  - Manual:    Actions tab -> "Release packages" -> Run workflow, or
+#               gh workflow run release.yml -f tag=v1.0.0
+#               (use this to backfill releases whose tag predates this file)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and attach (e.g. v1.0.0)
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm git
+
+      - name: Check out the tag (for its PKGBUILD)
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      - name: Check tag matches pkgver
+        run: |
+          ver=$(grep '^pkgver=' PKGBUILD | cut -d= -f2)
+          if [ "v$ver" != "$TAG" ]; then
+            echo "Tag $TAG does not match pkgver $ver in PKGBUILD" >&2
+            exit 1
+          fi
+
+      - name: Build package
+        run: |
+          useradd -m builder
+          mkdir /home/builder/build
+          cp PKGBUILD /home/builder/build/
+          chown -R builder /home/builder/build
+          su builder -c 'cd ~/build && makepkg --noconfirm'
+          mkdir dist
+          cp /home/builder/build/*.pkg.tar.zst dist/
+          cd dist && sha256sum *.pkg.tar.zst > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist
+
+      - name: Create release if missing, then attach files
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --verify-tag --notes-from-tag --title "$TAG"
+          gh release upload "$TAG" dist/* --clobber

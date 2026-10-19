@@ -36,8 +36,7 @@ features have no pacman equivalent and why.
 ## Testing status
 
 This has been tested and confirmed working on **systemd-based Arch Linux**
-systems (vanilla Arch, and systemd-based derivatives like Manjaro and
-EndeavourOS).
+systems (vanilla Arch, and systemd-based derivatives like EndeavourOS).
 
 It has **not** been tested on non-systemd-init Arch-based distributions
 (e.g. Artix Linux running OpenRC, runit, s6, or dinit). Nothing in aptOS
@@ -53,4 +52,4 @@ please open a PR or issue describing what you tested and the result.
 
 ## License
 
-AGPLv3. Copyright (C) 2026 MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>. See `LICENSE`.
+AGPLv3. Copyright (C) 2026 MR_UNKNOWN74IDK <mr.unknown74idk@proton.me>. See [LICENSE](https://github.com/MR-UNKNOWN74IDK/aptOS/blob/main/LICENSE).
